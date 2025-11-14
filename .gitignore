@@ -34,3 +34,11 @@ Thumbs.db
 # Screenshots (if any)
 screenshots/
 
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+.terraform.lock.hcl
+tfplan
+*.tfvars
+*.tfvars.json
