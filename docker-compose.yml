@@ -1,0 +1,24 @@
+services:
+  scrapper:
+    build: .
+    volumes:
+      - ~/.aws:/root/.aws:ro
+      - ./src:/app/src
+    environment:
+      - AWS_PROFILE=${AWS_PROFILE:-default}
+      - AWS_REGION=${AWS_REGION:-us-east-1}
+      
+      - PROJECT_NAME=${PROJECT_NAME:-ws-analytics}
+      - STAGE=${STAGE:-stg}
+      - DRIVER_TYPE=${DRIVER_TYPE:-CHROMIUM}
+      
+      - SCRAPPING_TYPE=${SCRAPPING_TYPE:-DAILY}
+      - TOURNAMENT_NAME=${TOURNAMENT_NAME}
+      - TOURNAMENT_URL=${TOURNAMENT_URL}
+      - START_DATE=${START_DATE}
+      - END_DATE=${END_DATE}
+      - SEASON=${SEASON}
+      - MATCH=${MATCH}
+    stdin_open: true
+    tty: true
+
