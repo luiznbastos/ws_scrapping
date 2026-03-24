@@ -58,7 +58,7 @@ class ScrappingTask:
                 var overlays = document.querySelectorAll('[class*="Row-buoy"]');
                 overlays.forEach(function(el) { el.remove(); });
             """)
-            logger.info("Removed Row-buoy overlays with JavaScript")
+            logger.debug("Removed Row-buoy overlays with JavaScript")
         except:
             pass
         
@@ -159,6 +159,7 @@ class ScrapeSeasons(ScrappingTask):
             )
         seasons_df = pd.DataFrame(seasons)
         self.database_client.write_df(seasons_df, "seasons", if_exists="append")
+        logger.info(f"Saved {len(self.season_id)} seasons for league={self.tournament_name}: {self.season_id}")
 
 
     def run(self):
@@ -417,6 +418,11 @@ class ScrapeMatches(ScrappingTask):
                 )
         seasons_matches_df = pd.DataFrame(self.matches)
         self.database_client.write_df(seasons_matches_df, "season_matches", if_exists="append")
+        months = [m["date"] for m in self.monthly_matches]
+        logger.info(
+            f"Saved {len(self.matches)} matches for league={self.tournament_directory} "
+            f"season={self.season_id} months={months}"
+        )
 
     def run(self):
         logging.info(f"Capturando partidas da temporada {self.season_id}.")
@@ -575,7 +581,12 @@ class ScrapeEvents(ScrappingTask):
         self.database_client.write_df(
             run_context_df, "scrape_runs", if_exists="append"
         )
-        logging.info(f"Partida {self.match_id} capturada com sucesso.")
+        logger.info(
+            f"Saved events for league={self.run_context.get('tournaments')} "
+            f"season={self.run_context.get('season_id')} "
+            f"month={self.run_context.get('date')} "
+            f"match={self.match_id}"
+        )
 
     def run(self):
         if self.match_has_happened and self.match_has_data:

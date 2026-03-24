@@ -87,9 +87,9 @@ class NetworkDriver(ABC):
         self.driver.get(url)
 
     def get_network_events(self) -> None:
-        logging.info("Getting network logs ...")
+        logging.debug("Getting network logs ...")
         self.raw_events = self.driver.get_log("performance")
-        logging.info(f"Got {len(self.raw_events)} raw events")
+        logging.debug(f"Got {len(self.raw_events)} raw events")
 
         self.events = [
             {
@@ -107,7 +107,7 @@ class NetworkDriver(ABC):
             }
             for event in self.raw_events
         ]
-        logging.info(f"Got {len(self.raw_events)} filtered events")
+        logging.debug(f"Got {len(self.raw_events)} filtered events")
         return self.events
 
     def get_network_responses(
