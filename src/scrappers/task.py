@@ -515,8 +515,7 @@ class ScrapeMatches(ScrappingTask):
             monthly_matches_df = pd.DataFrame(
                 jsondata.get("tournaments", [{}])[0].get("matches", {})
             )
-            matches["df"] = monthly_matches_df.drop(columns=["incidents"])
-            matches["df"]["bets"] = matches["df"]["bets"].apply(lambda x: str(x))
+            matches["df"] = monthly_matches_df.drop(columns=["incidents", "bets"])
 
             matches["match_ids"] = [
                 match.get("id", None)
