@@ -116,13 +116,13 @@ class NetworkDriver(ABC):
 
         self.selected_events = []
 
-        logging.info("Getting body messages from selected network messages ...")
-        logging.info(
+        logging.debug("Getting body messages from selected network messages ...")
+        logging.debug(
             f"Looking for events with method = {method} and base_url = {url_to_find}"
         )
         for event in self.events:
             if event["method"] == method and event["response"]["url"] in (url_to_find):
-                logging.info(
+                logging.debug(
                     f"Found event with requestId = {event['requestId']} and url = {event['response']['url']}"
                 )
                 try:

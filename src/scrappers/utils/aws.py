@@ -23,7 +23,7 @@ def create_prefix(bucket_name=None, prefix=None, s3_client=None):
         prefix_exists = True
 
     if not prefix_exists:
-        logging.info(f"{bucket_name}/{prefix} is being created")
+        logging.debug(f"{bucket_name}/{prefix} is being created")
         if prefix.endswith("/"):
             prefix = prefix[:-1]
         s3_client.put_object(Bucket=bucket_name, Key=f"{prefix}/")
