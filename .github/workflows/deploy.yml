@@ -43,5 +43,5 @@ jobs:
           docker push ${{ env.ECR_REPOSITORY_URL }}:${{ env.IMAGE_VERSION }}
           docker push ${{ env.ECR_REPOSITORY_URL }}:latest
 
-      - name: Purge old images
-        run: make docker-purge
+      # - name: Purge old images
+      #   run: make docker-purge
