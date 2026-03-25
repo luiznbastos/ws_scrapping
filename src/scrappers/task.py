@@ -181,16 +181,38 @@ class ScrapeSeasons(ScrappingTask):
 
         logger.info(f"{self._ctx} Extracting season data from network events")
         self.network_driver.get_network_events()
-        filtered_season_url = [
+
+        all_response_urls = [
             event["response"]["url"]
             for event in self.network_driver.events
             if "response" in event
-            and event["response"]["url"].startswith(
-                "https://1xbet.whoscored.com/regions/"
-            )
-            and len(event["response"]["url"]) > 100
         ]
+        logger.debug(f"{self._ctx} Captured {len(self.network_driver.events)} network events, {len(all_response_urls)} with responses")
+        for url in all_response_urls:
+            logger.debug(f"{self._ctx}   response_url={url}")
+
+        filtered_season_url = [
+            url for url in all_response_urls
+            if url.startswith("https://1xbet.whoscored.com/regions/")
+            and len(url) > 100
+        ]
+
+        if not filtered_season_url:
+            logger.error(
+                f"{self._ctx} No season URLs found in network events. "
+                f"total_events={len(self.network_driver.events)} "
+                f"response_urls={len(all_response_urls)}"
+            )
+            for url in all_response_urls[:20]:
+                logger.error(f"{self._ctx}   captured_url={url}")
+            raise RuntimeError(f"No season data URLs found for {self.tournament_name}")
+
         self.network_driver.get_network_responses(url_to_find=filtered_season_url)
+
+        if not self.network_driver.selected_events:
+            logger.error(f"{self._ctx} get_network_responses returned empty for urls={filtered_season_url}")
+            raise RuntimeError(f"No response body found for season URLs")
+
         html_doc = self.network_driver.selected_events[0]["response"]["responseBody"]
         soup = BeautifulSoup(html_doc, "html.parser")
         seasons_select = soup.find("select", id="seasons")
@@ -622,10 +644,16 @@ class ScrapeEvents(ScrappingTask):
 
         if not filtered_urls:
             total_events = len(events) if events else 0
+            response_urls = [
+                e["response"]["url"] for e in events
+                if "response" in e
+            ] if events else []
             logger.warning(
                 f"{self._ctx} No matching network events found "
-                f"total_raw_events={total_events} — nothing saved"
+                f"total_raw_events={total_events} response_urls={len(response_urls)} — nothing saved"
             )
+            for url in response_urls[:10]:
+                logger.warning(f"{self._ctx}   captured_url={url}")
             return "failed"
 
         for new_url in filtered_urls:
