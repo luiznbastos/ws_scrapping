@@ -1,11 +1,15 @@
-import logging
+import logging, time
 from scrappers.task import ScrapeSeasons, ScrapeMatches, ScrapeEvents
 from scrappers.settings import settings
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+RUN = settings.run_id[:8]
+
 def scrape_seasons():
+    ctx = f"[run={RUN} step=seasons]"
+    logger.info(f"{ctx} Starting season scrape for league={settings.tournament_name}")
     seasons_scrapper = ScrapeSeasons(
         network_driver=settings.network_driver,
         tournament_name=settings.tournament_name,
@@ -14,22 +18,32 @@ def scrape_seasons():
         s3=settings.s3,
         s3_bucket=settings.s3_bucket,
     )
+    t0 = time.time()
     seasons_scrapper.run()
+    logger.info(f"{ctx} Done elapsed={time.time() - t0:.1f}s")
 
 
 def scrape_matches():
+    ctx = f"[run={RUN} step=matches]"
+    logger.info(f"{ctx} Starting match scrape")
     season = settings.season
     if season:
         read_seasons = settings.database_client.read_sql(f"SELECT * FROM seasons WHERE id = '{season}'")
     else:
         read_seasons = settings.database_client.read_sql("SELECT * FROM seasons")
     seasons_list = read_seasons.to_dict(orient="records")
-    for season in seasons_list:
+    total_seasons = len(seasons_list)
+    logger.info(f"{ctx} Found total_seasons={total_seasons}")
+    t0 = time.time()
+    saved = 0
+    skipped = 0
+    for i, season in enumerate(seasons_list, 1):
         season_url = season["url"]
         season_directory = season["season_prefix"]
         season_id = season["id"]
         tournament_directory = season["tournament_prefix"]
         is_current_season = True if season_id == "10317" else False
+        logger.info(f"{ctx} Processing season {i}/{total_seasons} season={season_id}")
         matches_scrapper = ScrapeMatches(
             tournament_directory,
             season_url,
@@ -40,10 +54,17 @@ def scrape_matches():
             s3=settings.s3,
             s3_bucket=settings.s3_bucket,
         )
-        matches_scrapper.run()
+        result = matches_scrapper.run()
+        if result == "skipped":
+            skipped += 1
+        else:
+            saved += 1
+    logger.info(f"{ctx} Done elapsed={time.time() - t0:.1f}s saved={saved} skipped={skipped}")
 
 
 def scrape_events():
+    ctx = f"[run={RUN} step=events]"
+    logger.info(f"{ctx} Starting event scrape")
     run_context = {
         "scrape_run_id": str(settings.run_id),
         "tournaments": settings.tournament_name,
@@ -58,7 +79,6 @@ def scrape_events():
     season = settings.season
     match = settings.match
     if start_date and end_date:
-        # Convert YYYY-MM-DD to YYYYMM format for comparison
         start_yyyymm = start_date.replace('-', '')[:6]
         end_yyyymm = end_date.replace('-', '')[:6]
         read_matches = settings.database_client.read_sql(
@@ -75,29 +95,54 @@ def scrape_events():
     else:
         read_matches = settings.database_client.read_sql("SELECT * FROM season_matches")
     season_matches = read_matches.to_dict(orient="records")
-    for match in season_matches:
+    total_matches = len(season_matches)
+    logger.info(f"{ctx} Found total_matches={total_matches}")
+    t0 = time.time()
+    saved = 0
+    skipped = 0
+    failed = 0
+    for i, match in enumerate(season_matches, 1):
         match_id = int(match["match_id"])
         match_url = match["match_url"]
         match_directory = match["match_path"]
         run_context["season_id"] = match["season_id"]
         run_context["date"] = match["date"]
-        events_scrapper = ScrapeEvents(
-            match_id,
-            match_url,
-            match_directory,
-            run_context,
-            network_driver=settings.network_driver,
-            database_client=settings.database_client,
-            s3=settings.s3,
-            s3_bucket=settings.s3_bucket,
-        )
-        events_scrapper.run()
+        try:
+            events_scrapper = ScrapeEvents(
+                match_id,
+                match_url,
+                match_directory,
+                run_context,
+                network_driver=settings.network_driver,
+                database_client=settings.database_client,
+                s3=settings.s3,
+                s3_bucket=settings.s3_bucket,
+            )
+            result = events_scrapper.run()
+            if result == "skipped":
+                skipped += 1
+            else:
+                saved += 1
+        except Exception as e:
+            failed += 1
+            logger.error(
+                f"{ctx} [season={match['season_id']} match={match_id}] "
+                f"Failed error=\"{type(e).__name__}: {e}\""
+            )
+        if i % 50 == 0 or i == total_matches:
+            logger.info(f"{ctx} Progress: {i}/{total_matches} saved={saved} skipped={skipped} failed={failed}")
+    logger.info(f"{ctx} Done elapsed={time.time() - t0:.1f}s saved={saved} skipped={skipped} failed={failed}")
 
 
 def main():
-    logger.info("=" * 80)
-    logger.info("INSTALLED PYTHON PACKAGES")
-    logger.info("=" * 80)
+    ctx = f"[run={RUN}]"
+    logger.info(f"{ctx} WS Scrapper starting")
+    logger.info(f"{ctx}   tournament={settings.tournament_name} type={settings.scrapping_type.value}")
+    logger.info(f"{ctx}   season={settings.season or 'all'} match={settings.match or 'all'}")
+    logger.info(f"{ctx}   date_range={settings.start_date or '-'} -> {settings.end_date or '-'}")
+    logger.info(f"{ctx}   driver={settings.driver_type.value}")
+
+    logger.debug("INSTALLED PYTHON PACKAGES")
     try:
         from importlib.metadata import distributions
         installed_packages = [(d.metadata.get('Name', 'Unknown'), d.version) for d in distributions()]
@@ -108,16 +153,17 @@ def main():
         except Exception:
             logger.warning("Could not retrieve installed packages list")
             installed_packages = []
-    
+
     installed_packages.sort()
     for package_name, package_version in installed_packages:
-        logger.info(f"  {package_name}=={package_version}")
-    logger.info("=" * 80)
-    logger.info(f"Total packages: {len(installed_packages)}")
-    logger.info("=" * 80)
+        logger.debug(f"  {package_name}=={package_version}")
+    logger.debug(f"Total packages: {len(installed_packages)}")
+
+    t_total = time.time()
     scrape_seasons()
     scrape_matches()
     scrape_events()
+    logger.info(f"{ctx} Pipeline complete elapsed={time.time() - t_total:.1f}s")
 
 
 if __name__ == "__main__":

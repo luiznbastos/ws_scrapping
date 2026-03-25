@@ -48,11 +48,10 @@ class ScrappingTask:
                 )
                 overlay.click()
                 time.sleep(0.5)
-                logger.info(f"Dismissed overlay: {xpath}")
+                logger.debug(f"Dismissed overlay: {xpath}")
             except:
                 pass
         
-        # Try to remove Row-buoy overlay with JavaScript if it still exists
         try:
             self.network_driver.driver.execute_script("""
                 var overlays = document.querySelectorAll('[class*="Row-buoy"]');
@@ -85,13 +84,16 @@ class ScrapeSeasons(ScrappingTask):
         self.tournament_url = tournament_url
         self.bucket = s3_bucket
 
+    @property
+    def _ctx(self):
+        return f"[step=seasons league={self.tournament_name}]"
+
     def click_buttons(self, xpath, timeout=5):
         try:
             button = WebDriverWait(self.network_driver.driver, timeout).until(
                 EC.element_to_be_clickable((By.XPATH, xpath))
             )
             
-            # Scroll element into view
             self.network_driver.driver.execute_script(
                 "arguments[0].scrollIntoView({block: 'center', behavior: 'instant'});", 
                 button
@@ -101,7 +103,7 @@ class ScrapeSeasons(ScrappingTask):
             try:
                 button.click()
             except Exception:
-                logger.info(f"Normal click failed for {xpath}, trying JavaScript click")
+                logger.debug(f"Normal click failed for {xpath}, trying JavaScript click")
                 self.network_driver.driver.execute_script("arguments[0].click();", button)
             time.sleep(3)
         except Exception as e:
@@ -159,22 +161,25 @@ class ScrapeSeasons(ScrappingTask):
             )
         seasons_df = pd.DataFrame(seasons)
         self.database_client.write_df(seasons_df, "seasons", if_exists="append")
-        logger.info(f"Saved {len(self.season_id)} seasons for league={self.tournament_name}: {self.season_id}")
+        logger.info(f"{self._ctx} Saved count={len(self.season_id)} seasons={self.season_id}")
 
 
     def run(self):
         self.season_id = list()
 
         if self.season_is_scrapped:
-            logger.info(f"Temporadas {self.scrapped_seasons} já foram capturadas.")
-            return
+            season_ids = self.scrapped_seasons["id"].tolist()
+            logger.info(f"{self._ctx} Skipped: already_scraped count={len(season_ids)} seasons={season_ids}")
+            return "skipped"
 
+        logger.info(f"{self._ctx} Navigating url={self.tournament_url}")
         self.network_driver.get(self.tournament_url)
         time.sleep(3)
         self.dismiss_overlays()
         self._perform_tournaments_clicks()
         time.sleep(2)
 
+        logger.info(f"{self._ctx} Extracting season data from network events")
         self.network_driver.get_network_events()
         filtered_season_url = [
             event["response"]["url"]
@@ -198,7 +203,9 @@ class ScrapeSeasons(ScrappingTask):
             if year >= 2013:
                 self.season_id.append(season_value)
 
+        logger.info(f"{self._ctx} Found count={len(self.season_id)} seasons={self.season_id}")
         self.save()
+        return "saved"
 
 
 class ScrapeMatches(ScrappingTask):
@@ -224,6 +231,10 @@ class ScrapeMatches(ScrappingTask):
         self.update_season = update_season
         self.bucket = s3_bucket
 
+    @property
+    def _ctx(self):
+        return f"[step=matches season={self.season_id}]"
+
     def click_buttons(self, xpath, timeout=5):
         try:
             button = WebDriverWait(self.network_driver.driver, timeout).until(
@@ -236,7 +247,6 @@ class ScrapeMatches(ScrappingTask):
                 )
             )
         
-        # Scroll element into view
         self.network_driver.driver.execute_script(
             "arguments[0].scrollIntoView({block: 'center', behavior: 'instant'});", 
             button
@@ -246,7 +256,7 @@ class ScrapeMatches(ScrappingTask):
         try:
             button.click()
         except Exception:
-            logger.info(f"Normal click failed for {xpath}, trying JavaScript click")
+            logger.debug(f"Normal click failed for {xpath}, trying JavaScript click")
             self.network_driver.driver.execute_script("arguments[0].click();", button)
         time.sleep(2)
 
@@ -254,7 +264,7 @@ class ScrapeMatches(ScrappingTask):
         xpath = f"//*[@id='datePicker']/div/div[1]/table/tbody/tr[{row}]/td[{column}]"
         self.click_buttons(xpath)
 
-    def _perform_matchs_clicks(self):  # Cliques Padrões
+    def _perform_matchs_clicks(self):
         try:
             ad_xpath = "/html/body/div[8]/div/div[1]/button"
             self.click_buttons(ad_xpath, timeout=5)
@@ -293,7 +303,7 @@ class ScrapeMatches(ScrappingTask):
         self.click_buttons(calendar)
         self.click_buttons("//*[@id='datePicker']/div/div[1]/div/div/button/span[2]")
 
-    def _perform_current_matchs_clicks(self):  # Cliques da temporada atual em 2025
+    def _perform_current_matchs_clicks(self):
         try:
             self.click_buttons("/html/body/div[8]/div/div[1]/button", timeout=5)
         except:
@@ -316,9 +326,7 @@ class ScrapeMatches(ScrappingTask):
             self._select_date(row, column)
             self.click_buttons(calendar)
 
-    def _matches_pandemic(
-        self,
-    ):  # Seleciona datas para partidas durante a pandemia de 2020/21
+    def _matches_pandemic(self):
         try:
             self.click_buttons("/html/body/div[8]/div/div[1]/button", timeout=5)
         except:
@@ -341,9 +349,7 @@ class ScrapeMatches(ScrappingTask):
             self._select_date(row, column)
             self.click_buttons(calendar)
 
-    def _perform_matches_pandemic(
-        self,
-    ):  # Seleciona datas para partidas durante a pandemia de 2019/20
+    def _perform_matches_pandemic(self):
         try:
             self.click_buttons("/html/body/div[8]/div/div[1]/button", timeout=5)
         except:
@@ -391,7 +397,6 @@ class ScrapeMatches(ScrappingTask):
 
     def save(self):
         for matches in self.monthly_matches:
-            # os.makedirs(matches["month_path"], exist_ok=True)
             create_prefix(
                 bucket_name=self.bucket,
                 prefix=matches["month_path"],
@@ -401,9 +406,7 @@ class ScrapeMatches(ScrappingTask):
                 matches["df"], "monthly_matches", if_exists="append"
             )
             for match_id in matches["match_ids"]:
-                # match_path = os.path.join(matches["month_path"], str(match_id))
                 match_path = f"{matches['month_path']}/{str(match_id)}"
-                # os.makedirs(match_path, exist_ok=True)
                 create_prefix(
                     bucket_name=self.bucket, prefix=match_path, s3_client=self.s3
                 )
@@ -420,22 +423,19 @@ class ScrapeMatches(ScrappingTask):
         self.database_client.write_df(seasons_matches_df, "season_matches", if_exists="append")
         months = [m["date"] for m in self.monthly_matches]
         logger.info(
-            f"Saved {len(self.matches)} matches for league={self.tournament_directory} "
-            f"season={self.season_id} months={months}"
+            f"{self._ctx} Saved matches={len(self.matches)} months={months}"
         )
 
     def run(self):
-        logging.info(f"Capturando partidas da temporada {self.season_id}.")
         if self.match_is_scrapped:
-            logger.info(f"Partidas: {self.match_id} já foram capturadas.")
-            return
+            logger.info(f"{self._ctx} Skipped: already_scraped count={len(self.match_id)}")
+            return "skipped"
 
         a_elements = self.network_driver.driver.find_elements(By.TAG_NAME, "a")
-
-        # filter out non-visible links
         visible_a_elements = list(filter(lambda e: (e.is_displayed()), a_elements))
-        logging.info(f"Found {len(visible_a_elements)} visible links")
+        logger.debug(f"Found {len(visible_a_elements)} visible links")
 
+        logger.info(f"{self._ctx} Navigating url={self.season_url}")
         url = self.season_url
         self.network_driver.get(url)
         time.sleep(3)
@@ -476,9 +476,9 @@ class ScrapeMatches(ScrappingTask):
             }
             for url in filtered_urls
         ]
+        logger.info(f"{self._ctx} Found months={len(self.monthly_matches)}")
         self.matches = []
         for matches in self.monthly_matches:
-            # os.makedirs(matches["month_path"], exist_ok=True)
             self.network_driver.get_network_responses(url_to_find=matches["url"])
             jsondata = json.loads(
                 self.network_driver.selected_events[0]["response"]["responseBody"]
@@ -495,6 +495,7 @@ class ScrapeMatches(ScrappingTask):
                 for match in jsondata.get("tournaments", [{}])[0].get("matches", {})
             ]
         self.save()
+        return "saved"
 
 
 class ScrapeEvents(ScrappingTask):
@@ -518,12 +519,18 @@ class ScrapeEvents(ScrappingTask):
         self.run_context = run_context
         self.bucket = s3_bucket
 
+    @property
+    def _ctx(self):
+        return (
+            f"[step=events season={self.run_context.get('season_id')} "
+            f"match={self.match_id}]"
+        )
+
     def click_buttons(self, xpath, timeout=5):
         button = WebDriverWait(self.network_driver.driver, timeout).until(
             EC.element_to_be_clickable((By.XPATH, xpath))
         )
         
-        # Scroll element into view
         self.network_driver.driver.execute_script(
             "arguments[0].scrollIntoView({block: 'center', behavior: 'instant'});", 
             button
@@ -533,7 +540,7 @@ class ScrapeEvents(ScrappingTask):
         try:
             button.click()
         except Exception:
-            logger.info(f"Normal click failed for {xpath}, trying JavaScript click")
+            logger.debug(f"Normal click failed for {xpath}, trying JavaScript click")
             self.network_driver.driver.execute_script("arguments[0].click();", button)
         time.sleep(2)
 
@@ -559,7 +566,6 @@ class ScrapeEvents(ScrappingTask):
         monthly_matches_df = self.database_client.read_sql(
             "SELECT * FROM monthly_matches"
         )
-        # logger.info(f"Monthly matches dataframe columns: {monthly_matches_df.columns}")
         match_date = monthly_matches_df[monthly_matches_df["id"] == self.match_id][
             "starttime"
         ].values[0]
@@ -582,25 +588,19 @@ class ScrapeEvents(ScrappingTask):
             run_context_df, "scrape_runs", if_exists="append"
         )
         logger.info(
-            f"Saved events for league={self.run_context.get('tournaments')} "
-            f"season={self.run_context.get('season_id')} "
-            f"month={self.run_context.get('date')} "
-            f"match={self.match_id}"
+            f"{self._ctx} Saved path={self.match_prefix}/events.json"
         )
 
     def run(self):
         if self.match_has_happened and self.match_has_data:
-            logger.info(
-                f"Partida {self.match_id} já aconteceu e os dados já foram capturados."
-            )
-            return
+            logger.debug(f"{self._ctx} Skipped: already_scraped")
+            return "skipped"
 
         if not self.match_has_happened and not self.match_has_data:
-            logger.info(
-                f"Partida {self.match_id} ainda não aconteceu e os dados ainda não foram capturados."
-            )
-            return
+            logger.debug(f"{self._ctx} Skipped: not_yet_played")
+            return "skipped"
 
+        logger.info(f"{self._ctx} Navigating url={self.match_url}")
         self.network_driver.get(self.match_url)
         time.sleep(2)
         self.dismiss_overlays()
@@ -622,10 +622,8 @@ class ScrapeEvents(ScrappingTask):
                 self.network_driver.selected_events[0]["response"]["responseBody"],
                 "html.parser",
             )
-            # #extrair as tags script
             script_tags = soup.find_all("script")
             script_contents = [tag.string for tag in script_tags]
-            # #selecionar a tag script desejada
             data = (
                 [
                     content
@@ -652,3 +650,4 @@ class ScrapeEvents(ScrappingTask):
 
             self.events = json.loads(data)
             self.save()
+        return "saved"
