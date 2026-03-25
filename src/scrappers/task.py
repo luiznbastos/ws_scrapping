@@ -466,17 +466,21 @@ class ScrapeMatches(ScrappingTask):
             )
             and event["response"]["url"].endswith("&isAggregate=false")
         ]
-        self.monthly_matches = [
-            {
-                "url": url,
-                "date": self.extract_date_from_url(url),
-                "month_path": os.path.join(
-                    self.season_directory, self.extract_date_from_url(url)
-                ),
-            }
-            for url in filtered_urls
-        ]
-        logger.info(f"{self._ctx} Found months={len(self.monthly_matches)}")
+        seen_dates = set()
+        self.monthly_matches = []
+        for url in filtered_urls:
+            date = self.extract_date_from_url(url)
+            if date and date not in seen_dates:
+                seen_dates.add(date)
+                self.monthly_matches.append({
+                    "url": url,
+                    "date": date,
+                    "month_path": os.path.join(self.season_directory, date),
+                })
+        logger.info(
+            f"{self._ctx} Found months={len(self.monthly_matches)} "
+            f"(from {len(filtered_urls)} network responses, {len(filtered_urls) - len(self.monthly_matches)} duplicates dropped)"
+        )
         self.matches = []
         for matches in self.monthly_matches:
             self.network_driver.get_network_responses(url_to_find=matches["url"])
@@ -615,6 +619,15 @@ class ScrapeEvents(ScrappingTask):
             )
             and event["response"]["url"].endswith("/live")
         ]
+
+        if not filtered_urls:
+            total_events = len(events) if events else 0
+            logger.warning(
+                f"{self._ctx} No matching network events found "
+                f"total_raw_events={total_events} — nothing saved"
+            )
+            return "failed"
+
         for new_url in filtered_urls:
             self.network_driver.get_network_responses(url_to_find=new_url)
 

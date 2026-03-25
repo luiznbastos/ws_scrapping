@@ -78,22 +78,23 @@ def scrape_events():
     end_date = settings.end_date
     season = settings.season
     match = settings.match
+    cols = "DISTINCT match_id, match_path, match_url, date, season_id"
     if start_date and end_date:
         start_yyyymm = start_date.replace('-', '')[:6]
         end_yyyymm = end_date.replace('-', '')[:6]
         read_matches = settings.database_client.read_sql(
-            f"SELECT * FROM season_matches WHERE date BETWEEN '{start_yyyymm}' AND '{end_yyyymm}'"
+            f"SELECT {cols} FROM season_matches WHERE date BETWEEN '{start_yyyymm}' AND '{end_yyyymm}'"
         )
     elif season:
         read_matches = settings.database_client.read_sql(
-            f"SELECT * FROM season_matches WHERE season_id = {season}"
+            f"SELECT {cols} FROM season_matches WHERE season_id = {season}"
         )
     elif match:
         read_matches = settings.database_client.read_sql(
-            f"SELECT * FROM season_matches WHERE match_id = {match}"
+            f"SELECT {cols} FROM season_matches WHERE match_id = {match}"
         )
     else:
-        read_matches = settings.database_client.read_sql("SELECT * FROM season_matches")
+        read_matches = settings.database_client.read_sql(f"SELECT {cols} FROM season_matches")
     season_matches = read_matches.to_dict(orient="records")
     total_matches = len(season_matches)
     logger.info(f"{ctx} Found total_matches={total_matches}")
