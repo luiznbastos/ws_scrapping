@@ -1,0 +1,47 @@
+name: Build and Deploy to ECR
+
+on:
+  push:
+    branches: [main]
+
+env:
+  AWS_REGION: us-east-1
+  AWS_PROFILE: ws-deploy
+  BRANCH_NAME: ${{ github.ref_name }}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        run: |
+          make configure-aws-profile \
+            AWS_ACCESS_KEY_ID=${{ secrets.AWS_ACCESS_KEY_ID }} \
+            AWS_SECRET_ACCESS_KEY=${{ secrets.AWS_SECRET_ACCESS_KEY }} \
+            TF_VAR_assume_role_arn=""
+
+      - name: Generate image tag
+        run: make get-docker-image-tag
+
+      - name: Setup ECR repository
+        run: make setup-ecr-repository
+
+      - name: Login to ECR
+        run: make docker-login
+
+      - name: Build Docker image
+        run: docker build -t ws_scrapping:${{ env.IMAGE_VERSION }} .
+
+      - name: Tag and push image
+        run: |
+          docker tag ws_scrapping:${{ env.IMAGE_VERSION }} ${{ env.ECR_REPOSITORY_URL }}:${{ env.IMAGE_VERSION }}
+          docker tag ws_scrapping:${{ env.IMAGE_VERSION }} ${{ env.ECR_REPOSITORY_URL }}:latest
+          docker push ${{ env.ECR_REPOSITORY_URL }}:${{ env.IMAGE_VERSION }}
+          docker push ${{ env.ECR_REPOSITORY_URL }}:latest
+
+      - name: Purge old images
+        run: make docker-purge

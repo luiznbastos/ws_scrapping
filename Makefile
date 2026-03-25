@@ -4,8 +4,10 @@ REPOSITORY_NAME ?= $(shell basename $(CURDIR))
 # AWS Configuration
 configure-aws-profile:
 	aws configure set region $(AWS_REGION) --profile $(AWS_PROFILE)
-	aws configure set role_arn $(TF_VAR_assume_role_arn) --profile $(AWS_PROFILE)
-	aws configure set source_profile $(AWS_PROFILE) --profile $(AWS_PROFILE)
+	@if [ -n "$(TF_VAR_assume_role_arn)" ]; then \
+		aws configure set role_arn $(TF_VAR_assume_role_arn) --profile $(AWS_PROFILE); \
+		aws configure set source_profile $(AWS_PROFILE) --profile $(AWS_PROFILE); \
+	fi
 	aws configure set duration_seconds 3600
 	aws configure set aws_access_key_id $(AWS_ACCESS_KEY_ID) --profile $(AWS_PROFILE)
 	aws configure set aws_secret_access_key $(AWS_SECRET_ACCESS_KEY) --profile $(AWS_PROFILE)
