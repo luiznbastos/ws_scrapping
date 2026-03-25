@@ -19,20 +19,36 @@
 - Produces back to SSM:
   - Batch job definition ARN: `/${project}/batch/jobs/${job_name}/arn` (for orchestration)
 ## What This Service Does
-- Extracts raw footbal match and event data and persists raw JSON/NDJSON artifacts.
-- Implements retries and pacing to respect source limits.
+- Extracts raw football match and event data from WhoScored and persists raw JSON artifacts to S3 and metadata to Redshift.
+- Runs three sequential steps: **seasons** → **matches** → **events**.
+- Each step is **incremental by default**: it detects what already exists in the database/S3 and only processes new data.
+- Supports **force refresh** via environment variables to re-scrape specific steps (with downward cascade).
+- Implements pacing (sleeps between page loads) to respect source limits.
 ## Orchestration & Pipeline Context
 - Cloud execution: this job is triggered by the orchestrator.
 - Previous step: infrastructure provisioned by `ws_infrastructure` (S3/ECR/Batch).
 - Next step: `ws_preprocessing` consumes raw data and loads staging/bronze.
+## Pipeline Steps
+
+1. **Seasons** (`ScrapeSeasons`): Navigates the tournament page, extracts available season IDs from the HTML dropdown. Saves season metadata (ID, URL, S3 prefix) to the `seasons` table. Skips if seasons already exist unless force-refreshed.
+
+2. **Matches** (`ScrapeMatches`): For each season, navigates the fixtures page and clicks through months to capture network responses with match data. Saves per-month match details to `monthly_matches` and match routing info to `season_matches`. Detects which months are already scraped and only processes new ones unless force-refreshed.
+
+3. **Events** (`ScrapeEvents`): For each match, navigates the live match page and extracts detailed event data (passes, shots, formations, etc.) from embedded JSON. Saves `events.json` to S3 and logs the run to `scrape_runs`. Skips matches that haven't happened yet or already have data in S3 unless force-refreshed.
+
 ## Structure
 ```
 ws_scrapping/
 ├── src/
-│   ├── scrappers/
-│   ├── driver/
-│   ├── utils/
-│   └── runner.py
+│   ├── runner.py              # Entry point — runs seasons → matches → events
+│   └── scrappers/
+│       ├── settings.py        # Pydantic settings (env vars + SSM)
+│       ├── task.py            # ScrapeSeasons, ScrapeMatches, ScrapeEvents
+│       ├── driver/
+│       │   └── network_driver.py  # Selenium/Chrome WebDriver abstraction
+│       └── utils/
+│           ├── database.py    # Redshift client (SQLAlchemy)
+│           └── aws.py         # S3 helpers
 ├── Dockerfile
 ├── Makefile
 └── terraform/
@@ -45,12 +61,25 @@ ws_scrapping/
 **Required:**
 - `AWS_REGION`: AWS region
 
-**Optional (retrieved from SSM or env):**
+**Runner:**
 - `RUN_ID`: Unique identifier for this run (auto-generated if not provided)
-- Source parameters (tournament, date range, etc.) per scraper
+- `SCRAPPING_TYPE`: `DAILY`, `DATE_RANGE`, or `FULL_RUN`
+- `DRIVER_TYPE`: `REMOTE` or `CHROMIUM` (default `CHROMIUM`)
+- `TOURNAMENT_NAME`: League identifier (e.g. `laliga`)
+- `TOURNAMENT_URL`: WhoScored tournament URL
+- `SEASON`: Restrict to a single season ID (optional)
+- `MATCH`: Restrict to a single match ID (optional)
+- `START_DATE` / `END_DATE`: Date range filter for events (format `YYYY-MM-DD`)
+
+**Force Refresh (backfill):**
+- `FORCE_REFRESH_SEASONS`: `true` to re-scrape all seasons (cascades to matches and events)
+- `FORCE_REFRESH_MATCHES`: `true` to re-scrape all matches (cascades to events)
+- `FORCE_REFRESH_EVENTS`: `true` to re-scrape events even if they already exist in S3
+
+Flags cascade downward: enabling seasons implies matches and events; enabling matches implies events.
 
 **S3 (from SSM when running in Batch):**
-- `/${project}/s3/analytics/name`: S3 bucket for raw data (mapped to `S3_BUCKET`)
+- `/${project}/s3/analytics/name`: S3 bucket for raw data
 
 ## Usage
 
@@ -74,30 +103,17 @@ python src/runner.py
 
 ### AWS Batch Deployment
 
-The service runs as an AWS Batch job:
+The service runs as an AWS Batch job. Deployment is handled by GitHub Actions on push to `main`:
 
-1. Build Docker image:
-```
-docker build -t ws_scrapping:latest .
-```
-
-2. Push to ECR:
-```
-aws ecr get-login-password --region us-east-1 | \
-  docker login --username AWS --password-stdin <account-id>.dkr.ecr.us-east-1.amazonaws.com
-docker tag ws_scrapping:latest <account-id>.dkr.ecr.us-east-1.amazonaws.com/ws_scrapping:latest
-docker push <account-id>.dkr.ecr.us-east-1.amazonaws.com/ws_scrapping:latest
-```
-
-3. Submit job via AWS Batch (example):
-```
-aws batch submit-job \
-  --job-name ws-scrapping-$(date +%s) \
-  --job-definition ws-analytics-scrapping \
-  --job-queue ws-analytics-job-queue
-```
+1. The `.github/workflows/deploy.yml` workflow builds a `linux/amd64` Docker image and pushes it to ECR.
+2. The Makefile contains the build/push targets (`make build`, `make push`, `make deploy`).
+3. The orchestrator (`ws_orchestrator`) submits Batch jobs with the appropriate environment variables.
 ## Outputs
-- Raw JSON/NDJSON per match/event series to S3 (raw prefix) or local in dev.
+- `seasons` table in Redshift: season IDs, URLs, S3 prefixes.
+- `season_matches` table: match IDs, URLs, S3 paths, linked to seasons.
+- `monthly_matches` table: detailed match metadata per month (teams, scores, times).
+- `scrape_runs` table: audit log of which matches were scraped per run.
+- `events.json` files in S3: detailed match event data (passes, shots, formations).
 ## Infrastructure Used
 - AWS Batch job definition referencing shared queue and ECR image; S3; SSM; CloudWatch.
 ## Citation

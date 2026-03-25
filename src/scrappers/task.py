@@ -125,24 +125,17 @@ class ScrapeSeasons(ScrappingTask):
             pass
         self.click_buttons("//*[@id='sub-navigation']/ul/li[2]/a")
 
-    @property
-    def season_is_scrapped(self):
-        seasons = "seasons"
-        check_table_exists = f"""
-        SELECT EXISTS (
-            SELECT * FROM information_schema.Tables
-            WHERE table_name = '{seasons}'
-        );
-        """
-        resultado = self.database_client.fetch_one(check_table_exists)
-        resultado = resultado[0] if resultado else False
-        if resultado == True:
-            self.scrapped_seasons = self.database_client.read_sql(
-                "SELECT id FROM seasons"
-            )
-            if not self.scrapped_seasons["id"].empty:
-                return True
-        return False
+    def _get_existing_season_ids(self):
+        check = self.database_client.fetch_one("""
+            SELECT EXISTS (
+                SELECT * FROM information_schema.Tables
+                WHERE table_name = 'seasons'
+            );
+        """)
+        if check and check[0]:
+            df = self.database_client.read_sql("SELECT id FROM seasons")
+            return set(df["id"].tolist()) if not df["id"].empty else set()
+        return set()
 
     def save(self):
         seasons = []
@@ -166,14 +159,7 @@ class ScrapeSeasons(ScrappingTask):
         logger.info(f"{self._ctx} Saved count={len(self.season_id)} seasons={self.season_id}")
 
 
-    def run(self):
-        self.season_id = list()
-
-        if self.season_is_scrapped:
-            season_ids = self.scrapped_seasons["id"].tolist()
-            logger.info(f"{self._ctx} Skipped: already_scraped count={len(season_ids)} seasons={season_ids}")
-            return "skipped"
-
+    def _scrape_season_ids_from_page(self):
         logger.info(f"{self._ctx} Navigating url={self.tournament_url}")
         self.network_driver.get(self.tournament_url)
         time.sleep(3)
@@ -218,6 +204,7 @@ class ScrapeSeasons(ScrappingTask):
         html_doc = self.network_driver.selected_events[0]["response"]["responseBody"]
         soup = BeautifulSoup(html_doc, "html.parser")
         seasons_select = soup.find("select", id="seasons")
+        scraped = []
         for option in seasons_select.find_all("option"):
             value = option.get("value")
             start_index = value.find("Seasons/")
@@ -225,9 +212,30 @@ class ScrapeSeasons(ScrappingTask):
             season_text = option.text.strip()
             year = int(season_text.split("/")[0])
             if year >= 2013:
-                self.season_id.append(season_value)
+                scraped.append(season_value)
+        return scraped
 
-        logger.info(f"{self._ctx} Found count={len(self.season_id)} seasons={self.season_id}")
+    def run(self, force=False):
+        existing = self._get_existing_season_ids()
+
+        if existing and not force:
+            logger.info(f"{self._ctx} Skipped: already_scraped count={len(existing)} seasons={sorted(existing)}")
+            return "skipped"
+
+        scraped = self._scrape_season_ids_from_page()
+
+        if force and existing:
+            self.database_client.execute_query("DELETE FROM seasons")
+            logger.info(f"{self._ctx} Force refresh: cleared {len(existing)} existing seasons, re-saving all {len(scraped)}")
+            self.season_id = scraped
+        else:
+            new_ids = [s for s in scraped if s not in existing]
+            if not new_ids:
+                logger.info(f"{self._ctx} No new seasons found (scraped={len(scraped)}, existing={len(existing)})")
+                return "skipped"
+            logger.info(f"{self._ctx} Found new={len(new_ids)} seasons={new_ids} (existing={len(existing)})")
+            self.season_id = new_ids
+
         self.save()
         return "saved"
 
@@ -400,24 +408,19 @@ class ScrapeMatches(ScrappingTask):
         match = re.search(r"d=(\d{6})", url)
         return match.group(1) if match else None
 
-    @property
-    def match_is_scrapped(self):
-        matches = "season_matches"
-        check_table_exists = f"""
-        SELECT EXISTS (
-            SELECT * FROM information_schema.Tables
-            WHERE table_name = '{matches}'
-        );
-        """
-        exist_check_result = self.database_client.fetch_one(check_table_exists)
-        exist_check_result = exist_check_result[0] if exist_check_result else False
-        if exist_check_result == True:
-            self.match_id = self.database_client.read_sql(
-                f"SELECT match_id FROM season_matches WHERE season_id = '{self.season_id}'"
-            )["match_id"]
-            if not self.match_id.empty:
-                return True
-        return False
+    def _get_existing_months(self):
+        check = self.database_client.fetch_one("""
+            SELECT EXISTS (
+                SELECT * FROM information_schema.Tables
+                WHERE table_name = 'season_matches'
+            );
+        """)
+        if check and check[0]:
+            df = self.database_client.read_sql(
+                f"SELECT DISTINCT date FROM season_matches WHERE season_id = '{self.season_id}'"
+            )
+            return set(df["date"].tolist()) if not df["date"].empty else set()
+        return set()
 
     def save(self):
         for matches in self.monthly_matches:
@@ -450,18 +453,13 @@ class ScrapeMatches(ScrappingTask):
             f"{self._ctx} Saved matches={len(self.matches)} months={months}"
         )
 
-    def run(self):
-        if self.match_is_scrapped:
-            logger.info(f"{self._ctx} Skipped: already_scraped count={len(self.match_id)}")
-            return "skipped"
-
+    def _scrape_months_from_page(self):
         a_elements = self.network_driver.driver.find_elements(By.TAG_NAME, "a")
         visible_a_elements = list(filter(lambda e: (e.is_displayed()), a_elements))
         logger.debug(f"Found {len(visible_a_elements)} visible links")
 
         logger.info(f"{self._ctx} Navigating url={self.season_url}")
-        url = self.season_url
-        self.network_driver.get(url)
+        self.network_driver.get(self.season_url)
         time.sleep(3)
         self.dismiss_overlays()
 
@@ -491,20 +489,44 @@ class ScrapeMatches(ScrappingTask):
             and event["response"]["url"].endswith("&isAggregate=false")
         ]
         seen_dates = set()
-        self.monthly_matches = []
+        monthly = []
         for url in filtered_urls:
             date = self.extract_date_from_url(url)
             if date and date not in seen_dates:
                 seen_dates.add(date)
-                self.monthly_matches.append({
+                monthly.append({
                     "url": url,
                     "date": date,
                     "month_path": os.path.join(self.season_directory, date),
                 })
         logger.info(
-            f"{self._ctx} Found months={len(self.monthly_matches)} "
-            f"(from {len(filtered_urls)} network responses, {len(filtered_urls) - len(self.monthly_matches)} duplicates dropped)"
+            f"{self._ctx} Found months={len(monthly)} "
+            f"(from {len(filtered_urls)} network responses, {len(filtered_urls) - len(monthly)} duplicates dropped)"
         )
+        return monthly
+
+    def run(self, force=False):
+        existing_months = self._get_existing_months()
+
+        if existing_months and not force:
+            logger.info(f"{self._ctx} Skipped: already_scraped months={sorted(existing_months)}")
+            return "skipped"
+
+        all_months = self._scrape_months_from_page()
+
+        if force:
+            self.database_client.execute_query(
+                f"DELETE FROM season_matches WHERE season_id = '{self.season_id}'"
+            )
+            self.monthly_matches = all_months
+            logger.info(f"{self._ctx} Force refresh: cleared existing, processing all {len(all_months)} months")
+        else:
+            self.monthly_matches = [m for m in all_months if m["date"] not in existing_months]
+            if not self.monthly_matches:
+                logger.info(f"{self._ctx} No new months (scraped={len(all_months)}, existing={len(existing_months)})")
+                return "skipped"
+            logger.info(f"{self._ctx} Processing new_months={len(self.monthly_matches)} (existing={len(existing_months)})")
+
         self.matches = []
         for matches in self.monthly_matches:
             self.network_driver.get_network_responses(url_to_find=matches["url"])
@@ -532,6 +554,7 @@ class ScrapeEvents(ScrappingTask):
         match_url: str,
         match_prefix: str,
         run_context: dict,
+        match_starttime: str = None,
         network_driver: RemoteNetworkDriver = None,
         database_client=None,
         s3=None,
@@ -544,6 +567,7 @@ class ScrapeEvents(ScrappingTask):
         self.match_prefix = match_prefix
         self.match_id = match_id
         self.run_context = run_context
+        self.match_starttime = match_starttime
         self.bucket = s3_bucket
 
     @property
@@ -587,18 +611,13 @@ class ScrapeEvents(ScrappingTask):
 
     @property
     def match_has_happened(self):
-        now = datetime.now()
-        london_tz = pytz.timezone("UTC")
-        london_datetime = now.astimezone(london_tz)
-        monthly_matches_df = self.database_client.read_sql(
-            "SELECT * FROM monthly_matches"
-        )
-        match_date = monthly_matches_df[monthly_matches_df["id"] == self.match_id][
-            "starttime"
-        ].values[0]
-        match_date = datetime.strptime(match_date, "%Y-%m-%dT%H:%M:%S")
-        match_date = match_date.replace(tzinfo=london_tz)
-        return True if match_date < london_datetime else False
+        if not self.match_starttime:
+            return True
+        utc = pytz.timezone("UTC")
+        now_utc = datetime.now().astimezone(utc)
+        match_date = datetime.strptime(self.match_starttime, "%Y-%m-%dT%H:%M:%S")
+        match_date = match_date.replace(tzinfo=utc)
+        return match_date < now_utc
 
     def save(self):
         self.s3.put_object(
@@ -618,13 +637,13 @@ class ScrapeEvents(ScrappingTask):
             f"{self._ctx} Saved path={self.match_prefix}/events.json"
         )
 
-    def run(self):
-        if self.match_has_happened and self.match_has_data:
-            logger.debug(f"{self._ctx} Skipped: already_scraped")
+    def run(self, force=False):
+        if not self.match_has_happened:
+            logger.debug(f"{self._ctx} Skipped: not_yet_played")
             return "skipped"
 
-        if not self.match_has_happened and not self.match_has_data:
-            logger.debug(f"{self._ctx} Skipped: not_yet_played")
+        if not force and self.match_has_data:
+            logger.debug(f"{self._ctx} Skipped: already_scraped")
             return "skipped"
 
         logger.info(f"{self._ctx} Navigating url={self.match_url}")

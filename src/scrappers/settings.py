@@ -43,6 +43,11 @@ class AppSettings(BaseSettings):
     season: Optional[str] = Field(default=None)
     match: Optional[str] = Field(default=None)
 
+    # Backfill: force re-scrape per step
+    force_refresh_seasons: bool = Field(default=False)
+    force_refresh_matches: bool = Field(default=False)
+    force_refresh_events: bool = Field(default=False)
+
 
     def _get_ssm_parameter(self, name: str) -> Optional[str]:
         if not self._ssm_client:

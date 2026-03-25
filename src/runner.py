@@ -7,9 +7,15 @@ logger = logging.getLogger(__name__)
 
 RUN = settings.run_id[:8]
 
+FORCE_SEASONS = settings.force_refresh_seasons
+FORCE_MATCHES = settings.force_refresh_matches or FORCE_SEASONS
+FORCE_EVENTS = settings.force_refresh_events or FORCE_MATCHES
+
+
 def scrape_seasons():
     ctx = f"[run={RUN} step=seasons]"
-    logger.info(f"{ctx} Starting season scrape for league={settings.tournament_name}")
+    force = FORCE_SEASONS
+    logger.info(f"{ctx} Starting season scrape for league={settings.tournament_name} force_refresh={force}")
     seasons_scrapper = ScrapeSeasons(
         network_driver=settings.network_driver,
         tournament_name=settings.tournament_name,
@@ -19,13 +25,14 @@ def scrape_seasons():
         s3_bucket=settings.s3_bucket,
     )
     t0 = time.time()
-    seasons_scrapper.run()
+    seasons_scrapper.run(force=force)
     logger.info(f"{ctx} Done elapsed={time.time() - t0:.1f}s")
 
 
 def scrape_matches():
     ctx = f"[run={RUN} step=matches]"
-    logger.info(f"{ctx} Starting match scrape")
+    force = FORCE_MATCHES
+    logger.info(f"{ctx} Starting match scrape force_refresh={force}")
     season = settings.season
     if season:
         read_seasons = settings.database_client.read_sql(f"SELECT * FROM seasons WHERE id = '{season}'")
@@ -34,6 +41,9 @@ def scrape_matches():
     seasons_list = read_seasons.to_dict(orient="records")
     total_seasons = len(seasons_list)
     logger.info(f"{ctx} Found total_seasons={total_seasons}")
+
+    max_season_id = str(max(int(s["id"]) for s in seasons_list)) if seasons_list else None
+
     t0 = time.time()
     saved = 0
     skipped = 0
@@ -42,8 +52,8 @@ def scrape_matches():
         season_directory = season["season_prefix"]
         season_id = season["id"]
         tournament_directory = season["tournament_prefix"]
-        is_current_season = True if season_id == "10317" else False
-        logger.info(f"{ctx} Processing season {i}/{total_seasons} season={season_id}")
+        is_current_season = (str(season_id) == max_season_id)
+        logger.info(f"{ctx} Processing season {i}/{total_seasons} season={season_id} current={is_current_season}")
         matches_scrapper = ScrapeMatches(
             tournament_directory,
             season_url,
@@ -54,7 +64,7 @@ def scrape_matches():
             s3=settings.s3,
             s3_bucket=settings.s3_bucket,
         )
-        result = matches_scrapper.run()
+        result = matches_scrapper.run(force=force)
         if result == "skipped":
             skipped += 1
         else:
@@ -64,7 +74,8 @@ def scrape_matches():
 
 def scrape_events():
     ctx = f"[run={RUN} step=events]"
-    logger.info(f"{ctx} Starting event scrape")
+    force = FORCE_EVENTS
+    logger.info(f"{ctx} Starting event scrape force_refresh={force}")
     run_context = {
         "scrape_run_id": str(settings.run_id),
         "tournaments": settings.tournament_name,
@@ -98,6 +109,11 @@ def scrape_events():
     season_matches = read_matches.to_dict(orient="records")
     total_matches = len(season_matches)
     logger.info(f"{ctx} Found total_matches={total_matches}")
+
+    starttime_df = settings.database_client.read_sql("SELECT id, starttime FROM monthly_matches")
+    starttime_lookup = dict(zip(starttime_df["id"], starttime_df["starttime"]))
+    logger.info(f"{ctx} Loaded starttime lookup for {len(starttime_lookup)} matches")
+
     t0 = time.time()
     saved = 0
     skipped = 0
@@ -114,12 +130,13 @@ def scrape_events():
                 match_url,
                 match_directory,
                 run_context,
+                match_starttime=starttime_lookup.get(match_id),
                 network_driver=settings.network_driver,
                 database_client=settings.database_client,
                 s3=settings.s3,
                 s3_bucket=settings.s3_bucket,
             )
-            result = events_scrapper.run()
+            result = events_scrapper.run(force=force)
             if result == "skipped":
                 skipped += 1
             else:
@@ -142,6 +159,10 @@ def main():
     logger.info(f"{ctx}   season={settings.season or 'all'} match={settings.match or 'all'}")
     logger.info(f"{ctx}   date_range={settings.start_date or '-'} -> {settings.end_date or '-'}")
     logger.info(f"{ctx}   driver={settings.driver_type.value}")
+    logger.info(
+        f"{ctx}   force_refresh: seasons={FORCE_SEASONS} "
+        f"matches={FORCE_MATCHES} events={FORCE_EVENTS}"
+    )
 
     logger.debug("INSTALLED PYTHON PACKAGES")
     try:
