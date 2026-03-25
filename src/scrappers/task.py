@@ -11,6 +11,8 @@ from scrappers.utils.aws import create_prefix, object_exists
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+WS_BASE_URL = "https://www.whoscored.com"
+
 
 class ScrappingTask:
     def __init__(
@@ -193,7 +195,7 @@ class ScrapeSeasons(ScrappingTask):
 
         filtered_season_url = [
             url for url in all_response_urls
-            if url.startswith("https://1xbet.whoscored.com/regions/")
+            if url.startswith(f"{WS_BASE_URL}/regions/")
             and len(url) > 100
         ]
 
@@ -436,7 +438,7 @@ class ScrapeMatches(ScrappingTask):
                     {
                         "match_id": match_id,
                         "match_path": match_path,
-                        "match_url": f"https://1xbet.whoscored.com/matches/{str(match_id)}/live",
+                        "match_url": f"{WS_BASE_URL}/matches/{str(match_id)}/live",
                         "date": matches["date"],
                         "season_id": self.season_id,
                     }
@@ -484,7 +486,7 @@ class ScrapeMatches(ScrappingTask):
             for event in self.network_driver.events
             if "response" in event
             and event["response"]["url"].startswith(
-                "https://1xbet.whoscored.com/tournaments/"
+                f"{WS_BASE_URL}/tournaments/"
             )
             and event["response"]["url"].endswith("&isAggregate=false")
         ]
@@ -637,7 +639,7 @@ class ScrapeEvents(ScrappingTask):
             for event in events
             if "response" in event
             and event["response"]["url"].startswith(
-                "https://1xbet.whoscored.com/matches/"
+                f"{WS_BASE_URL}/matches/"
             )
             and event["response"]["url"].endswith("/live")
         ]
