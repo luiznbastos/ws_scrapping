@@ -34,12 +34,12 @@ jobs:
         run: make docker-login
 
       - name: Build Docker image
-        run: docker build -t ws_scrapping:${{ env.IMAGE_VERSION }} .
+        run: docker build -t ${{ github.event.repository.name }}:${{ env.IMAGE_VERSION }} .
 
       - name: Tag and push image
         run: |
-          docker tag ws_scrapping:${{ env.IMAGE_VERSION }} ${{ env.ECR_REPOSITORY_URL }}:${{ env.IMAGE_VERSION }}
-          docker tag ws_scrapping:${{ env.IMAGE_VERSION }} ${{ env.ECR_REPOSITORY_URL }}:latest
+          docker tag ${{ github.event.repository.name }}:${{ env.IMAGE_VERSION }} ${{ env.ECR_REPOSITORY_URL }}:${{ env.IMAGE_VERSION }}
+          docker tag ${{ github.event.repository.name }}:${{ env.IMAGE_VERSION }} ${{ env.ECR_REPOSITORY_URL }}:latest
           docker push ${{ env.ECR_REPOSITORY_URL }}:${{ env.IMAGE_VERSION }}
           docker push ${{ env.ECR_REPOSITORY_URL }}:latest
 
