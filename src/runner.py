@@ -20,9 +20,9 @@ def scrape_seasons():
         network_driver=settings.network_driver,
         tournament_name=settings.tournament_name,
         tournament_url=settings.tournament_url,
-        database_client=settings.database_client,
         s3=settings.s3,
         s3_bucket=settings.s3_bucket,
+        run_id=settings.run_id,
     )
     t0 = time.time()
     seasons_scrapper.run(force=force)
@@ -60,9 +60,9 @@ def scrape_matches():
             season_directory,
             is_current_season=is_current_season,
             network_driver=settings.network_driver,
-            database_client=settings.database_client,
             s3=settings.s3,
             s3_bucket=settings.s3_bucket,
+            run_id=settings.run_id,
         )
         result = matches_scrapper.run(force=force)
         if result == "skipped":
@@ -132,7 +132,6 @@ def scrape_events():
                 run_context,
                 match_starttime=starttime_lookup.get(match_id),
                 network_driver=settings.network_driver,
-                database_client=settings.database_client,
                 s3=settings.s3,
                 s3_bucket=settings.s3_bucket,
             )

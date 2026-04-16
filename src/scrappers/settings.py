@@ -6,9 +6,8 @@ from pydantic import Field
 from pydantic_settings import BaseSettings
 import uuid
 from datetime import datetime
-from scrappers.utils.database import DatabaseClient
+from scrappers.utils.duckdb_client import DuckDBClient
 import os
-from urllib.parse import quote_plus
 
 class ScrappingType(str, Enum):
     DAILY = "DAILY"
@@ -71,26 +70,17 @@ class AppSettings(BaseSettings):
         return self.__ssm_client
     
     @property
-    def database_client(self) -> DatabaseClient:
+    def database_client(self) -> DuckDBClient:
         if not hasattr(self, "_database_client"):
-            ssm_path_prefix = f"/{self.project_name}/database"
-            db_user = self._get_ssm_parameter(ssm_path_prefix + "/username")
-            db_password = self._get_ssm_parameter(ssm_path_prefix + "/password")
-            db_host = self._get_ssm_parameter(ssm_path_prefix + "/host")
-            db_name = self._get_ssm_parameter(ssm_path_prefix + "/database")
-            
-            if db_user and db_password and db_host and db_name:
-                encoded_password = quote_plus(db_password)
-                db_url = f"redshift+redshift_connector://{db_user}:{encoded_password}@{db_host}:5439/{db_name}"
-                print(f"Database connection: {db_user}@{db_host}:5439/{db_name}")
-                self._database_client = DatabaseClient(db_url)
-            else:
-                missing = []
-                if not db_user: missing.append("username")
-                if not db_password: missing.append("password")
-                if not db_host: missing.append("host")
-                if not db_name: missing.append("database")
-                raise ValueError(f"Missing database credentials from SSM: {', '.join(missing)}. Check SSM parameters.")
+            bucket = self.s3_bucket
+            if not bucket:
+                raise ValueError("Missing S3 bucket — check SSM parameter /ws-analytics/s3/analytics/name")
+            region = os.environ.get("AWS_REGION", "us-east-1")
+            self._database_client = DuckDBClient(
+                bucket=bucket,
+                run_id=self.run_id,
+                aws_region=region,
+            )
         return self._database_client
 
 

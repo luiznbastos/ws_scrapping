@@ -5,7 +5,7 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from scrappers.driver.network_driver import RemoteNetworkDriver, NetworkDriver
-from scrappers.utils.database import DatabaseClient
+from scrappers.utils.duckdb_client import DuckDBClient
 from scrappers.utils.aws import create_prefix, object_exists
 
 logging.basicConfig(level=logging.INFO)
@@ -19,7 +19,7 @@ class ScrappingTask:
         self,
         network_driver: NetworkDriver = None,
         s3: boto3.client = None,
-        database_client: DatabaseClient = None,
+        database_client: DuckDBClient = None,
     ):
         self.network_driver = network_driver
         self.s3 = s3
@@ -80,11 +80,13 @@ class ScrapeSeasons(ScrappingTask):
         tournament_name=None,
         tournament_url=None,
         s3_bucket=None,
+        run_id=None,
     ):
         super().__init__(network_driver=network_driver, s3=s3, database_client=database_client)
         self.tournament_name = tournament_name
         self.tournament_url = tournament_url
         self.bucket = s3_bucket
+        self.run_id = run_id
 
     @property
     def _ctx(self):
@@ -126,16 +128,10 @@ class ScrapeSeasons(ScrappingTask):
         self.click_buttons("//*[@id='sub-navigation']/ul/li[2]/a")
 
     def _get_existing_season_ids(self):
-        check = self.database_client.fetch_one("""
-            SELECT EXISTS (
-                SELECT * FROM information_schema.Tables
-                WHERE table_name = 'seasons'
-            );
-        """)
-        if check and check[0]:
-            df = self.database_client.read_sql("SELECT id FROM seasons")
-            return set(df["id"].tolist()) if not df["id"].empty else set()
-        return set()
+        df = self.database_client.read_sql("SELECT id FROM seasons")
+        if df.empty or "id" not in df.columns:
+            return set()
+        return set(df["id"].astype(str).tolist())
 
     def save(self):
         seasons = []
@@ -155,7 +151,7 @@ class ScrapeSeasons(ScrappingTask):
                 }
             )
         seasons_df = pd.DataFrame(seasons)
-        self.database_client.write_df(seasons_df, "seasons", if_exists="append")
+        self.database_client.write_df(seasons_df, "seasons")
         logger.info(f"{self._ctx} Saved count={len(self.season_id)} seasons={self.season_id}")
 
 
@@ -225,8 +221,7 @@ class ScrapeSeasons(ScrappingTask):
         scraped = self._scrape_season_ids_from_page()
 
         if force and existing:
-            self.database_client.execute_query("DELETE FROM seasons")
-            logger.info(f"{self._ctx} Force refresh: cleared {len(existing)} existing seasons, re-saving all {len(scraped)}")
+            logger.info(f"{self._ctx} Force refresh: overwriting {len(existing)} existing seasons, re-saving all {len(scraped)}")
             self.season_id = scraped
         else:
             new_ids = [s for s in scraped if s not in existing]
@@ -253,6 +248,7 @@ class ScrapeMatches(ScrappingTask):
         database_client=None,
         s3=None,
         s3_bucket=None,
+        run_id=None,
     ):
         super().__init__(network_driver=network_driver, s3=s3, database_client=database_client)
         self.tournament_directory = tournament_directory
@@ -262,6 +258,7 @@ class ScrapeMatches(ScrappingTask):
         self.is_current_season = is_current_season
         self.update_season = update_season
         self.bucket = s3_bucket
+        self.run_id = run_id
 
     @property
     def _ctx(self):
@@ -409,29 +406,22 @@ class ScrapeMatches(ScrappingTask):
         return match.group(1) if match else None
 
     def _get_existing_months(self):
-        check = self.database_client.fetch_one("""
-            SELECT EXISTS (
-                SELECT * FROM information_schema.Tables
-                WHERE table_name = 'season_matches'
-            );
-        """)
-        if check and check[0]:
-            df = self.database_client.read_sql(
-                f"SELECT DISTINCT date FROM season_matches WHERE season_id = '{self.season_id}'"
-            )
-            return set(df["date"].tolist()) if not df["date"].empty else set()
-        return set()
+        df = self.database_client.read_sql(
+            f"SELECT DISTINCT date FROM season_matches WHERE season_id = '{self.season_id}'"
+        )
+        if df.empty or "date" not in df.columns:
+            return set()
+        return set(df["date"].astype(str).tolist())
 
     def save(self):
+        all_monthly_dfs = []
         for matches in self.monthly_matches:
             create_prefix(
                 bucket_name=self.bucket,
                 prefix=matches["month_path"],
                 s3_client=self.s3,
             )
-            self.database_client.write_df(
-                matches["df"], "monthly_matches", if_exists="append"
-            )
+            all_monthly_dfs.append(matches["df"])
             for match_id in matches["match_ids"]:
                 match_path = f"{matches['month_path']}/{str(match_id)}"
                 create_prefix(
@@ -447,7 +437,10 @@ class ScrapeMatches(ScrappingTask):
                     }
                 )
         seasons_matches_df = pd.DataFrame(self.matches)
-        self.database_client.write_df(seasons_matches_df, "season_matches", if_exists="append")
+        if all_monthly_dfs:
+            monthly_matches_df = pd.concat(all_monthly_dfs, ignore_index=True)
+            self.database_client.write_df(monthly_matches_df, "monthly_matches")
+            self.database_client.write_df(seasons_matches_df, "season_matches")
         months = [m["date"] for m in self.monthly_matches]
         logger.info(
             f"{self._ctx} Saved matches={len(self.matches)} months={months}"
@@ -515,11 +508,8 @@ class ScrapeMatches(ScrappingTask):
         all_months = self._scrape_months_from_page()
 
         if force:
-            self.database_client.execute_query(
-                f"DELETE FROM season_matches WHERE season_id = '{self.season_id}'"
-            )
             self.monthly_matches = all_months
-            logger.info(f"{self._ctx} Force refresh: cleared existing, processing all {len(all_months)} months")
+            logger.info(f"{self._ctx} Force refresh: overwriting existing, processing all {len(all_months)} months")
         else:
             self.monthly_matches = [m for m in all_months if m["date"] not in existing_months]
             if not self.monthly_matches:
@@ -625,13 +615,6 @@ class ScrapeEvents(ScrappingTask):
             Key=f"{self.match_prefix}/events.json",
             Body=json.dumps(self.events),
             ContentType="application/json",
-        )
-
-        self.run_context["match_id"] = self.match_id
-        self.run_context["is_scrapped"] = True
-        run_context_df = pd.DataFrame([self.run_context])
-        self.database_client.write_df(
-            run_context_df, "scrape_runs", if_exists="append"
         )
         logger.info(
             f"{self._ctx} Saved path={self.match_prefix}/events.json"
