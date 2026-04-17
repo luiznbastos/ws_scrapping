@@ -23,6 +23,7 @@ def scrape_seasons():
         s3=settings.s3,
         s3_bucket=settings.s3_bucket,
         run_id=settings.run_id,
+        database_client=settings.database_client,
     )
     t0 = time.time()
     seasons_scrapper.run(force=force)
@@ -63,6 +64,7 @@ def scrape_matches():
             s3=settings.s3,
             s3_bucket=settings.s3_bucket,
             run_id=settings.run_id,
+            database_client=settings.database_client,
         )
         result = matches_scrapper.run(force=force)
         if result == "skipped":
@@ -134,6 +136,7 @@ def scrape_events():
                 network_driver=settings.network_driver,
                 s3=settings.s3,
                 s3_bucket=settings.s3_bucket,
+                database_client=settings.database_client,
             )
             result = events_scrapper.run(force=force)
             if result == "skipped":
