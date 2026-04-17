@@ -76,10 +76,15 @@ class AppSettings(BaseSettings):
             if not bucket:
                 raise ValueError("Missing S3 bucket — check SSM parameter /ws-analytics/s3/analytics/name")
             region = os.environ.get("AWS_REGION", "us-east-1")
+            session = boto3.Session(region_name=region)
+            creds = session.get_credentials().get_frozen_credentials()
             self._database_client = DuckDBClient(
                 bucket=bucket,
                 run_id=self.run_id,
                 aws_region=region,
+                aws_access_key_id=creds.access_key,
+                aws_secret_access_key=creds.secret_key,
+                aws_session_token=creds.token,
             )
         return self._database_client
 

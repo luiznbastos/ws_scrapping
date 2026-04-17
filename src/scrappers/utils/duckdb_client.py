@@ -22,12 +22,27 @@ MANAGED_TABLES = ["seasons", "monthly_matches", "season_matches"]
 
 
 class DuckDBClient:
-    def __init__(self, bucket: str, run_id: str, aws_region: str = "us-east-1"):
+    def __init__(
+        self,
+        bucket: str,
+        run_id: str,
+        aws_region: str = "us-east-1",
+        aws_access_key_id: Optional[str] = None,
+        aws_secret_access_key: Optional[str] = None,
+        aws_session_token: Optional[str] = None,
+    ):
         self.bucket = bucket
         self.run_id = run_id
         self._con = duckdb.connect()
         self._con.execute("INSTALL httpfs; LOAD httpfs;")
         self._con.execute(f"SET s3_region='{aws_region}';")
+        if aws_access_key_id:
+            self._con.execute(f"SET s3_access_key_id='{aws_access_key_id}';")
+        if aws_secret_access_key:
+            self._con.execute(f"SET s3_secret_access_key='{aws_secret_access_key}';")
+        if aws_session_token:
+            self._con.execute(f"SET s3_session_token='{aws_session_token}';")
+        logger.debug(f"DuckDB S3 configured region={aws_region} key={aws_access_key_id[:8] if aws_access_key_id else 'none'}…")
         for table in MANAGED_TABLES:
             self._register_view(table)
 
