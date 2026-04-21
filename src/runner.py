@@ -36,9 +36,13 @@ def scrape_matches():
     logger.info(f"{ctx} Starting match scrape force_refresh={force}")
     season = settings.season
     if season:
-        read_seasons = settings.database_client.read_sql(f"SELECT * FROM seasons WHERE id = '{season}'")
+        read_seasons = settings.database_client.read_sql(
+            f"SELECT * FROM seasons WHERE id = '{season}' AND tournament_name = '{settings.tournament_name}'"
+        )
     else:
-        read_seasons = settings.database_client.read_sql("SELECT * FROM seasons")
+        read_seasons = settings.database_client.read_sql(
+            f"SELECT * FROM seasons WHERE tournament_name = '{settings.tournament_name}'"
+        )
     seasons_list = read_seasons.to_dict(orient="records")
     total_seasons = len(seasons_list)
     logger.info(f"{ctx} Found total_seasons={total_seasons}")
@@ -91,23 +95,35 @@ def scrape_events():
     end_date = settings.end_date
     season = settings.season
     match = settings.match
-    cols = "DISTINCT match_id, match_path, match_url, date, season_id"
     if start_date and end_date:
         start_yyyymm = start_date.replace('-', '')[:6]
         end_yyyymm = end_date.replace('-', '')[:6]
         read_matches = settings.database_client.read_sql(
-            f"SELECT {cols} FROM season_matches WHERE date BETWEEN '{start_yyyymm}' AND '{end_yyyymm}'"
+            f"SELECT DISTINCT sm.match_id, sm.match_path, sm.match_url, sm.date, sm.season_id"
+            f" FROM season_matches sm JOIN seasons s ON sm.season_id = s.id"
+            f" WHERE s.tournament_name = '{settings.tournament_name}'"
+            f" AND sm.date BETWEEN '{start_yyyymm}' AND '{end_yyyymm}'"
         )
     elif season:
         read_matches = settings.database_client.read_sql(
-            f"SELECT {cols} FROM season_matches WHERE season_id = {season}"
+            f"SELECT DISTINCT sm.match_id, sm.match_path, sm.match_url, sm.date, sm.season_id"
+            f" FROM season_matches sm JOIN seasons s ON sm.season_id = s.id"
+            f" WHERE s.tournament_name = '{settings.tournament_name}'"
+            f" AND sm.season_id = {season}"
         )
     elif match:
         read_matches = settings.database_client.read_sql(
-            f"SELECT {cols} FROM season_matches WHERE match_id = {match}"
+            f"SELECT DISTINCT sm.match_id, sm.match_path, sm.match_url, sm.date, sm.season_id"
+            f" FROM season_matches sm JOIN seasons s ON sm.season_id = s.id"
+            f" WHERE s.tournament_name = '{settings.tournament_name}'"
+            f" AND sm.match_id = {match}"
         )
     else:
-        read_matches = settings.database_client.read_sql(f"SELECT {cols} FROM season_matches")
+        read_matches = settings.database_client.read_sql(
+            f"SELECT DISTINCT sm.match_id, sm.match_path, sm.match_url, sm.date, sm.season_id"
+            f" FROM season_matches sm JOIN seasons s ON sm.season_id = s.id"
+            f" WHERE s.tournament_name = '{settings.tournament_name}'"
+        )
     season_matches = read_matches.to_dict(orient="records")
     total_matches = len(season_matches)
     logger.info(f"{ctx} Found total_matches={total_matches}")

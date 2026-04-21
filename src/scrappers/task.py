@@ -128,7 +128,9 @@ class ScrapeSeasons(ScrappingTask):
         self.click_buttons("//*[@id='sub-navigation']/ul/li[2]/a")
 
     def _get_existing_season_ids(self):
-        df = self.database_client.read_sql("SELECT id FROM seasons")
+        df = self.database_client.read_sql(
+            f"SELECT id FROM seasons WHERE tournament_name = '{self.tournament_name}'"
+        )
         if df.empty or "id" not in df.columns:
             return set()
         return set(df["id"].astype(str).tolist())
@@ -148,6 +150,7 @@ class ScrapeSeasons(ScrappingTask):
                     "url": f"{self.tournament_url}/Seasons/{id}",
                     "season_prefix": season_prefix,
                     "tournament_prefix": tournament_prefix,
+                    "tournament_name": self.tournament_name,
                 }
             )
         seasons_df = pd.DataFrame(seasons)
