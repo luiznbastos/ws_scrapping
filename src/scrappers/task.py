@@ -65,6 +65,18 @@ class ScrappingTask:
         
         time.sleep(1)
 
+    def save_screenshot(self, label: str = "screenshot") -> None:
+        local_path = "/tmp/screenshot.png"
+        self.network_driver.driver.save_screenshot(local_path)
+        bucket = getattr(self, "bucket", None)
+        run_id = getattr(self, "run_id", "unknown")
+        if bucket and self.s3:
+            s3_key = f"debug/screenshots/{run_id}/{label}.png"
+            self.s3.upload_file(local_path, bucket, s3_key)
+            logger.error(f"Screenshot saved to s3://{bucket}/{s3_key}")
+        else:
+            logger.error(f"Screenshot saved locally to {local_path} (no S3 client available)")
+
     def run(self, *args, **kwargs):
         raise NotImplementedError
 
@@ -111,9 +123,7 @@ class ScrapeSeasons(ScrappingTask):
                 self.network_driver.driver.execute_script("arguments[0].click();", button)
             time.sleep(3)
         except Exception as e:
-            self.network_driver.driver.save_screenshot(
-                "/app/screenshots/screenshot.png"
-            )
+            self.save_screenshot(label="seasons-click-failure")
             raise e
 
     def _perform_tournaments_clicks(self):
@@ -272,19 +282,24 @@ class ScrapeMatches(ScrappingTask):
             button = WebDriverWait(self.network_driver.driver, timeout).until(
                 EC.element_to_be_clickable((By.XPATH, xpath))
             )
-        except:
-            button = WebDriverWait(self.network_driver.driver, timeout).until(
-                EC.element_to_be_clickable(
-                    (By.CSS_SELECTOR, "td.datePicker_selectable")
+        except Exception as e:
+            try:
+                button = WebDriverWait(self.network_driver.driver, timeout).until(
+                    EC.element_to_be_clickable(
+                        (By.CSS_SELECTOR, "td.datePicker_selectable")
+                    )
                 )
-            )
-        
+            except Exception:
+                self.save_screenshot(label=f"matches-click-failure-{self.season_id}")
+                logger.error(f"{self._ctx} click_buttons failed xpath={xpath} page_url={self.network_driver.driver.current_url}")
+                raise e
+
         self.network_driver.driver.execute_script(
-            "arguments[0].scrollIntoView({block: 'center', behavior: 'instant'});", 
+            "arguments[0].scrollIntoView({block: 'center', behavior: 'instant'});",
             button
         )
         time.sleep(0.3)
-        
+
         try:
             button.click()
         except Exception:
